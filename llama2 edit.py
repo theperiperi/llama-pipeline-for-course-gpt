@@ -3,32 +3,86 @@ import requests
 import asyncio
 import aiohttp
 
-MAX_RETRIES = 3
-LLAMA2_ENDPOINT = 'https://www.llama2.ai/api'  # Enter llama2 endpoint here
+# TODO: Handle exceptions
 
-class LlamaInteraction:
+MAX_RETRIES = 3 
+
+class LlamaChat():
+    def __init__(self):
+        pass
+
+    def create(self, messages: list[dict], stream: bool = False, async_mode: bool = False, temprature: float = 0.75, topP: float = 0.9, max_tokens: int = 4096):
+        if async_mode and stream:
+            return self.async_make_retried_generator(messages, temprature, topP, max_tokens)
+        elif async_mode:
+            return self.async_get_full_response(messages, temprature, topP, max_tokens)
+        if stream:
+            return self.sync_make_retried_generator(messages, temprature, topP, max_tokens)
+        return self.sync_get_full_response(messages, temprature, topP, max_tokens)
+
     @staticmethod
-    async def async_make_retried_generator(input_text):
+    def sync_make_retried_generator(messages, temprature: float, topP: float, max_tokens: int):
         payload = {
-            "input": input_text
+            "prompt": messages[-1]['content'] if messages[-1]['role'] == 'user' else "",
+            "systemPrompt": messages[0]['content'] if messages[0]['role'] == 'system' else "", 
+            "version": "f4e2de70d66816a838a89eeeb621910adffb0dd0baba3976c96980970978018d",
+            "temperature": temprature,
+            "topP": topP,
+            "maxTokens": max_tokens,
+            "image": None,
+            "audio": None
+        }
+        for i in range(MAX_RETRIES):
+            try:
+                res = requests.post("https://www.llama2.ai/api", json=payload, stream=True)
+                for chunk in res.iter_content(chunk_size=1024):
+                    yield chunk.decode('utf-8')
+                break
+            except Exception as e:
+                if i == MAX_RETRIES - 1:
+                    raise e
+                time.sleep(1)
+
+    @staticmethod
+    async def async_make_retried_generator(messages, temprature: float, topP: float, max_tokens: int):
+        payload = {
+            "prompt": messages[-1]['content'] if messages[-1]['role'] == 'user' else "",
+            "systemPrompt": messages[0]['content'] if messages[0]['role'] == 'system' else "", 
+            "version": "f4e2de70d66816a838a89eeeb621910adffb0dd0baba3976c96980970978018d",
+            "temperature": temprature,
+            "topP": topP,
+            "maxTokens": max_tokens,
+            "image": None,
+            "audio": None
         }
         async with aiohttp.ClientSession() as session:
             for i in range(MAX_RETRIES):
                 try:
-                    async with session.post(LLAMA2_ENDPOINT, json=payload) as response:
-                        response.raise_for_status()  # Raise an error for bad responses
-                        output_text = await response.json()
-                        yield output_text.get('output', '')
+                    async with session.post("https://www.llama2.ai/api", json=payload) as res:
+                        async for chunk in res.content.iter_chunked(1024):
+                            yield chunk.decode('utf-8')
                         break
-                except aiohttp.ClientError as e:
-                    LlamaInteraction._handle_request_exception(e, i)
+                except Exception as e:
+                    if i == MAX_RETRIES - 1:
+                        raise e
+                    await asyncio.sleep(1)
 
     @staticmethod
-    def _handle_request_exception(e, retries):
-        if retries == MAX_RETRIES - 1:
-            raise e
-        time.sleep(1)
+    def sync_get_full_response(messages, temprature: float, topP: float, max_tokens: int):
+        response_data = ''
+        for chunk in LlamaChat.sync_make_retried_generator(messages, temprature, topP, max_tokens):
+            response_data += chunk
+        return response_data
 
+    @staticmethod
+    async def async_get_full_response(messages, temprature: float, topP: float, max_tokens: int):
+        response_data = ''
+        async for chunk in LlamaChat.async_make_retried_generator(messages, temprature, topP, max_tokens):
+            response_data += chunk
+        return response_data
+    
+
+    
 # Function to search with generated queries using a search API wrapper
 def search_with_queries(queries):
     # Replace 'YOUR_SEARCH_API_KEY' and 'YOUR_CX' with actual values for the Google Custom Search API
